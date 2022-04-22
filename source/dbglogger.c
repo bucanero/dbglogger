@@ -273,7 +273,7 @@ int dbglogger_init_mode(const unsigned char log_mode, const char* dest, const un
 
         case FILE_LOGGER:
             if (logFileInit(dest))
-                dbglogger_log("----- File (%s) debug logger initialized -----", dest) ;
+                dbglogger_log("----- File (%s) debug logger initialized -----", dest);
             break;
 
         default:

@@ -45,6 +45,16 @@ typedef enum {
     FILE_LOGGER    
 } LOGGER_MODES;
 
+typedef struct {
+	char method[8];
+	char resource[256];
+} dWebRequest_t;
+
+/*
+	int webReq_GetHandler(const dWebRequest_t* request, char *outFilePath);
+*/
+typedef int (*dWebReqHandler_t)(const dWebRequest_t*, char*);
+
 
 int dbglogger_init(void);
 int dbglogger_init_str(const char* ini_str);
@@ -70,6 +80,9 @@ int dbglogger_screenshot_tmp(const unsigned char alpha);
 
 // base64 file encoding method
 int dbglogger_b64encode(const char* filename);
+
+int web_start(int port, dWebReqHandler_t req);
+void web_stop();
 
 #ifdef __cplusplus
 }
