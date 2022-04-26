@@ -93,7 +93,7 @@ int main(s32 argc, const char* argv[])
           if (paddata.BTN_TRIANGLE) {
             // save a PNG screenshot without alpha channel in '/dev_hdd0/tmp/screenshot_YYYY_MM_DD_HH_MM_SS.png'
             dbglogger_log("Saving a screenshot to /dev_hdd0/tmp/ ...");
-//            dbglogger_screenshot_tmp(0);
+            dbglogger_screenshot_tmp(0);
           }
 
           if(paddata.BTN_START){

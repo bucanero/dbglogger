@@ -46,7 +46,7 @@ typedef enum {
 } LOGGER_MODES;
 
 typedef struct {
-	char method[8];
+	char method;
 	char resource[256];
 } dWebRequest_t;
 

@@ -6,7 +6,11 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
-#include <ctype.h>
+#ifdef __PPU__
+#include <net/poll.h>
+#else
+#include <poll.h>
+#endif
 
 #include "dbglogger.h"
 #include "systhread.h"
@@ -20,7 +24,7 @@ const char ERROR_PAGE[] = "<HTML><HEAD><TITLE>.:: HTTP/Error</TITLE></HEAD>"
              "<BODY BGCOLOR=\"#FFFFFF\" ALINK=\"#000000\" VLINK=\"#000000\" LINK=\"#000000\">"
              "<FONT FACE=\"Arial\"><H1>.:: <I>HTTP/Error</I></H1></FONT>"
              "<CENTER><IMG SRC=\"https://bucanero.github.io/bucanero/error.gif\" WIDTH=\"228\" HEIGHT=\"155\" BORDER=\"0\" ALT=\"Error\"></CENTER>"
-             "<P ALIGN=\"RIGHT\"><B><FONT FACE=\"Arial\" SIZE=\"3\">&lt;&lt; <A HREF=\"javascript:history.go(-1);\">go back</A> ::.</FONT></B></P></BODY></HTML>";
+             "<P ALIGN=\"RIGHT\"><B><FONT FACE=\"Arial\" SIZE=\"3\">&lt;&lt; <A HREF=\"javascript:history.go(-1);\">go back</A> ::.</FONT></B></P></BODY></HTML>\r\n";
 
 typedef struct {
     int idx;
@@ -37,7 +41,7 @@ static struct {
     {".html", "text/html"},
     {".txt", "text/plain"},
     {".png", "image/png"},
-    {".PNG", "image/png"},
+    {".gif", "image/gif"},
     {".jpg", "image/jpeg"},
     {".xml", "application/xml"},
     {".css", "text/css"},
@@ -47,6 +51,8 @@ static struct {
 
 static void* threads = NULL;
 static int run_server = 0;
+static int sockfd;
+
 
 static char* getContentType(const char *path)
 {
@@ -60,7 +66,23 @@ static char* getContentType(const char *path)
     return extensions[0].filetype;
 }
 
-static int serveFile(int socket, const char* path)
+static void sendResponse(int fd, char* buf, const char* code, const char* type, long len, const char* page)
+{
+    snprintf(buf, BUFSIZ, "HTTP/1.0 %s\r\n"
+        "Connection: close\r\n"
+        "Content-Type: %s\r\n"
+        "Content-Length: %ld\r\n"
+        "Server: dbglogger/1.0 (PlayStation)\r\n\r\n%s", code, type, len, page ? page : "");
+    if (send(fd, buf, strlen(buf), 0) == -1)
+        dbglogger_log("(error) send");
+}
+
+static inline void errorPage(int fd, char* buf)
+{
+    sendResponse(fd, buf, "404 Not Found", "text/html", strlen(ERROR_PAGE), ERROR_PAGE);
+}
+
+static int serveFile(int socket, const char* path, char method)
 {
     FILE *fd;
     int readRet = strlen(path);
@@ -70,10 +92,7 @@ static int serveFile(int socket, const char* path)
 
     if ((readRet > 0 && path[readRet-1] == '/') || (fd = fopen(path, "rb")) == NULL)
     {
-        snprintf(buf, BUFSIZ, "HTTP/1.0 404 Not Found\r\nContent-Type: text/html\r\n\r\n%s\r\n", ERROR_PAGE);
-        if (send(socket, buf, strlen(buf), 0) == -1)
-            dbglogger_log("(error) send");
-
+        errorPage(socket, buf);
         return 404;
     }
 
@@ -82,9 +101,13 @@ static int serveFile(int socket, const char* path)
     fseek(fd, 0, SEEK_SET);
 
     // Write header
-    snprintf(buf, BUFSIZ, "HTTP/1.0 200 OK\r\nContent-Length: %ld\r\n"
-        "Content-Type: %s\r\nServer: dbglogger\r\n\r\n", fsize, getContentType(path));
-    send(socket, buf, strlen(buf), 0);
+    sendResponse(socket, buf, "200 OK", getContentType(path), fsize, NULL);
+
+    // skip data for HEAD method
+    if (method == 'H') {
+        fclose(fd);
+        return 200;
+    }
 
     // Read file and Write to body
     while((readRet = fread(buf, 1, BUFSIZ, fd)) > 0)
@@ -101,13 +124,12 @@ static int serveFile(int socket, const char* path)
     return 200;
 }
 
-static dWebRequest_t * parseRequest(const char *buf)
+static dWebRequest_t * parseRequest(const char *start)
 {
     dWebRequest_t *newRequest;
-    const char *start = buf;
     const char *end;
 
-    if(strncmp("GET", start, 3) != 0)
+    if(strncmp("GET", start, 3) != 0 && strncmp("HEAD", start, 4) != 0)
     {
         dbglogger_log("[!] Unsupported HTTP Method");
         return NULL;
@@ -116,16 +138,12 @@ static dWebRequest_t * parseRequest(const char *buf)
     newRequest = malloc(sizeof(dWebRequest_t));
     memset(newRequest, 0, sizeof(dWebRequest_t));
 
-    strncpy(newRequest->method, "GET", sizeof(newRequest->method));
+    newRequest->method = start[0];
     // Jump past: "GET "
-    start += 4;
+    start = strchr(start, ' ') + 1;
+    end = strchr(start, ' ');
 
-    end=start;
-    while(*end && !isspace(*end))
-        ++end;
-
-    size_t pathLen = (end - start);
-    strncpy(newRequest->resource, start, pathLen);
+    strncpy(newRequest->resource, start, end - start);
 //    newRequest->resource[pathLen] = '\0';
 
     return newRequest;
@@ -139,55 +157,104 @@ static void* get_in_addr(struct sockaddr* sa)
     return NULL;
 }
 
-static void thread_handler(void* td)
+static void client_handler(void* td)
 {
-    int new_fd;
     threadData_t* data = (threadData_t*) td;
-    struct sockaddr_in their_addr; // connector's address
-    socklen_t sin_size = sizeof(their_addr);
     char buf[BUFSIZ];
+
+    dbglogger_printf("Thread #%d started (0x%08X)\n", data->idx, data->sockfd);
 
     while (run_server)
     {
-        dbglogger_printf("Thread #%d running (0x%08X)\n", data->idx, data->sockfd);
-
-        new_fd = accept(data->sockfd, (struct sockaddr*) &their_addr, &sin_size);
-        if (new_fd == -1 || !run_server)
+        if (data->sockfd < 0)
         {
-            dbglogger_log("(error) accept");
-            free(td);
-            sys_thread_exit(0);
+            usleep(5000);
+            continue;
         }
 
-        inet_ntop(their_addr.sin_family, get_in_addr((struct sockaddr*) &their_addr), buf, sizeof(buf));
-        dbglogger_printf("Thread #%d: got connection from %s\n", data->idx, buf);
+        dbglogger_printf("Client #%d running (0x%08X)\n", data->idx, data->sockfd);
 
         memset(buf, 0, BUFSIZ);
-        recv(new_fd, buf, BUFSIZ, 0);
+        recv(data->sockfd, buf, BUFSIZ, 0);
 
-        dbglogger_printf("---\n%s\n---\n", buf);
+        dbglogger_printf("%d>>\n---\n%s\n---\n", data->idx, buf);
         dWebRequest_t *newRequest = parseRequest(buf);
 
         // If parsing failed shutdown and exit
         if(newRequest)
         {
             if(data->reqHandler && data->reqHandler(newRequest, buf))
-                serveFile(new_fd, buf);
+                serveFile(data->sockfd, buf, newRequest->method);
+            else
+                errorPage(data->sockfd, buf);
 
             free(newRequest);
-        } 
+        }
+        else sendResponse(data->sockfd, buf, "501 Not Implemented", "text/plain", 0, NULL);
 
-        close(new_fd);
+        shutdown(data->sockfd, SHUT_RDWR);
+        close(data->sockfd);
+        data->sockfd = -1;
     }
 
-    dbglogger_log("(end)");
+    dbglogger_log("(end) #%d", data->idx);
+    sys_thread_exit(0);
+}
+
+static void httpd(void *td)
+{
+    int new_fd;
+    threadData_t* data = (threadData_t*) td;
+    struct pollfd pfds[1];
+    struct sockaddr_in their_addr; // connector's address
+    socklen_t sin_size = sizeof(their_addr);
+    char str[INET_ADDRSTRLEN];
+
+    pfds[0].fd = data->sockfd;
+    pfds[0].events = POLLIN;
+    pfds[0].revents = 0;
+
+    while (run_server)
+    {
+        dbglogger_log("webserver:%d running (0x%08X)", run_server, data->sockfd);
+
+        new_fd = poll(pfds, 1, 500);
+        if (new_fd <= 0 || !(pfds[0].revents & POLLIN) || !run_server)
+            continue;
+
+        new_fd = accept(data->sockfd, (struct sockaddr*) &their_addr, &sin_size);
+        if (new_fd < 0)
+        {
+            dbglogger_log("(error) accept");
+            continue;
+        }
+
+        inet_ntop(their_addr.sin_family, get_in_addr((struct sockaddr*) &their_addr), str, sizeof(str));
+        dbglogger_printf("httpd #%d: got connection from %s\n", data->idx, str);
+
+        while (new_fd)
+        {
+            for (int i=1; new_fd && i <= NUM_THREADS; i++)
+                if (data[i].sockfd < 0)
+                {
+                    data[i].sockfd = new_fd;
+                    new_fd = 0;
+                }
+            usleep(new_fd ? 1000 : 0);
+        }
+    }
+
+    shutdown(data->sockfd, SHUT_RDWR);
+    close(data->sockfd);
+
+    dbglogger_log("(stop) httpd");
     free(td);
     sys_thread_exit(0);
 }
 
 int web_start(int port, dWebReqHandler_t handler)
 {
-    int sockfd, yes = 1;
+    int yes = 1;
     struct sockaddr_in sa;
 
     memset(&sa, 0, sizeof(sa));
@@ -213,52 +280,42 @@ int web_start(int port, dWebReqHandler_t handler)
         return 0;
     }
 
-    if ((threads = sys_thread_alloc(NUM_THREADS)) == NULL) {
+    if ((threads = sys_thread_alloc(NUM_THREADS+1)) == NULL) {
         dbglogger_log("(error) thread alloc");
         return 0;
     }
 
     run_server = port;
-    dbglogger_log("webserver:%d starting threads...", port);
+    dbglogger_log("webserver:%d starting httpd...", port);
 
-    for (int i = 0; i < NUM_THREADS; ++i)
+    threadData_t *tdata = malloc(sizeof(threadData_t) * (NUM_THREADS+1));
+    tdata[0].idx = 0;
+    tdata[0].sockfd = sockfd;
+    tdata[0].reqHandler = NULL;
+
+    sys_thread_create2(threads, 0, &httpd, tdata);
+
+    for (int i = 1; i <= NUM_THREADS; i++)
     {
-        threadData_t *tdata = malloc(sizeof(threadData_t));
-        tdata->idx = i;
-        tdata->sockfd = sockfd;
-        tdata->reqHandler = handler;
+        tdata[i].idx = i;
+        tdata[i].sockfd = -1;
+        tdata[i].reqHandler = handler;
 
-        sys_thread_create2(threads, i, &thread_handler, tdata);
+        sys_thread_create2(threads, i, &client_handler, &tdata[i]);
     }
 
-    dbglogger_log("webserver:%d running", port);
     return 1;
-}
-
-static void end_socket(int port)
-{
-    struct sockaddr_in stSockAddr;
-    int socketFD = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-
-    memset(&stSockAddr, 0, sizeof(stSockAddr));
-    stSockAddr.sin_family = AF_INET;
-    stSockAddr.sin_port = htons(port);
-    inet_pton(AF_INET, "127.0.0.1", &stSockAddr.sin_addr);
-
-    connect(socketFD, (struct sockaddr *)&stSockAddr, sizeof(stSockAddr));
-    close(socketFD);
 }
 
 void web_stop()
 {
-    int port = run_server;
+    if (!run_server)
+        return;
+
     run_server = 0;
-
-    for (int i = 0; i < NUM_THREADS; ++i)
-    {
-        dbglogger_log("stop %d", i);
-        end_socket(port);
-    }
-
+    shutdown(sockfd, SHUT_RDWR);
+    close(sockfd);
     sys_thread_free(threads);
+
+    dbglogger_log("webserver:off");
 }

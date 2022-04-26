@@ -115,7 +115,7 @@ inline void* sys_thread_alloc(int num)
 
 inline int sys_thread_create(void* ptr_thread, void (*func)(void*), void* arg)
 {
-	return sysThreadCreate((sys_ppu_thread_t*) ptr_thread, func, arg, 1002, 0x2000, THREAD_JOINABLE, "");
+	return sysThreadCreate((sys_ppu_thread_t*) ptr_thread, func, arg, 1002, 0x8000, THREAD_JOINABLE, "");
 }
 
 inline int sys_thread_create2(void* ptr_threads, int index, void (*func)(void*), void* arg)
