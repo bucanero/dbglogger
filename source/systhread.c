@@ -257,6 +257,9 @@ inline int sys_thread_create(void* ptr_thread, void (*func)(void*), void* arg)
 
 	pthread_attr_t attr;
 	pthread_attr_init(&attr);
+#ifdef __PSVITA__
+	pthread_attr_setstacksize(&attr, 0x10000);
+#endif
   	pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_JOINABLE);
 
 	return pthread_create((pthread_t*) ptr_thread, &attr, _sys_thread, data);
