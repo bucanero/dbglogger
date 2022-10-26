@@ -252,7 +252,7 @@ static void httpd(void *td)
     sys_thread_exit(0);
 }
 
-int web_start(int port, dWebReqHandler_t handler)
+int dbg_webserver_start(int port, dWebReqHandler_t handler)
 {
     int yes = 1;
     struct sockaddr_in sa;
@@ -307,7 +307,7 @@ int web_start(int port, dWebReqHandler_t handler)
     return 1;
 }
 
-void web_stop()
+void dbg_webserver_stop()
 {
     if (!run_server)
         return;

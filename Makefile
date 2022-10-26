@@ -30,7 +30,7 @@ export DEPSDIR		:=	$(DEPS)/$(PLATFORM)
 endif
 #---------------------------------------------------------------------------------
 
-TARGET		:=	libdbglogger
+TARGET		:=	build/libdbglogger
 BUILD		:=	build
 SOURCE		:=	source
 INCLUDE		:=	include
@@ -80,8 +80,8 @@ $(BUILD):
 
 install: $(BUILD)
 	@echo Copying...
-	@cp include/*.h $(PORTLIBS)/include
-	@cp *.a $(PORTLIBS)/lib
+	@cp  -frv include/dbglogger.h $(PORTLIBS)/include
+	@cp  -frv $(TARGET).a $(PORTLIBS)/lib
 	@echo Done!
 
 clean:

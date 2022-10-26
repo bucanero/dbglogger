@@ -46,9 +46,9 @@ static char logFile[256];
 #define TCP_INI_STR         "tcp"
 #define FILE_INI_STR        "file"
 #define DEBUG_PORT          18194
+#define BASE64_LENGTH(X)    (4 * ((X + 2) / 3))
 #define B64_SRC_BUF_SIZE    45  // This *MUST* be a multiple of 3
-#define B64_DST_BUF_SIZE    4 * ((B64_SRC_BUF_SIZE + 2) / 3)
-
+#define B64_DST_BUF_SIZE    BASE64_LENGTH(B64_SRC_BUF_SIZE)
 
 static const char encode_table[2][65] = {
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=",
@@ -65,7 +65,7 @@ static const char encode_table[2][65] = {
  * buffer of at least 1+BASE64_LENGTH(length) bytes.
  * where BASE64_LENGTH(len) = (4 * ((LENGTH + 2) / 3))
  */
-static void uuencode(const unsigned char *s, const char *store, const int length, const char *tbl)
+static void uuencode(const unsigned char *s, char *store, const int length, const char *tbl)
 {
     int i;
     unsigned char *p = (unsigned char *)store;
@@ -132,6 +132,17 @@ static int dbglogger_base64(const char *filename, const unsigned int encode)
 int dbglogger_b64encode(const char *filename)
 {
     return dbglogger_base64(filename, ENCODE_BASE64);
+}
+
+char* dbg_base64_encode(const unsigned char *data, int data_len)
+{
+    char* out = malloc(BASE64_LENGTH(data_len) + 1);
+
+    if (!out)
+        return NULL;
+
+    uuencode(data, out, data_len, encode_table[ENCODE_BASE64]);
+    return (out);
 }
 
 #ifdef __PPU__

@@ -81,8 +81,12 @@ int dbglogger_screenshot_tmp(const unsigned char alpha);
 // base64 file encoding method
 int dbglogger_b64encode(const char* filename);
 
-int web_start(int port, dWebReqHandler_t req);
-void web_stop();
+// base64 data encoding method
+char* dbg_base64_encode(const unsigned char *data, int data_len);
+
+// web server methods
+int dbg_webserver_start(int port, dWebReqHandler_t req);
+void dbg_webserver_stop();
 
 #ifdef __cplusplus
 }
