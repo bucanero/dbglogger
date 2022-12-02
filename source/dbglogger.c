@@ -45,6 +45,7 @@ static char logFile[256];
 #define UDP_INI_STR         "udp"
 #define TCP_INI_STR         "tcp"
 #define FILE_INI_STR        "file"
+#define TTY_INI_STR         "tty"
 #define DEBUG_PORT          18194
 #define BASE64_LENGTH(X)    (4 * ((X + 2) / 3))
 #define B64_SRC_BUF_SIZE    45  // This *MUST* be a multiple of 3
@@ -246,6 +247,9 @@ void dbglogger_printf(const char* fmt, ...) {
             case FILE_LOGGER:
                 fileLog(buffer);
                 break;
+            case TTY_LOGGER:
+                printf("%s", buffer); // puts always append newline
+                break;
         }
     }
 }
@@ -287,6 +291,10 @@ int dbglogger_init_mode(const unsigned char log_mode, const char* dest, const un
                 dbglogger_log("----- File (%s) debug logger initialized -----", dest);
             break;
 
+        case TTY_LOGGER:
+            dbglogger_log("------ TTY logger initialized ------");
+            break;
+
         default:
             loggerMode = NO_LOGGER;
             // Logging disabled
@@ -316,6 +324,9 @@ int dbglogger_init_str(const char* ini_str) {
     } else 
     if (strcmp(mode, FILE_INI_STR) == 0) {
         return dbglogger_init_mode(FILE_LOGGER, data, 0);
+    } else
+    if (strcmp(mode, TTY_INI_STR) == 0) {
+        return dbglogger_init_mode(TTY_INI_STR, data, 0);
     }
     
     return(NO_LOGGER);
