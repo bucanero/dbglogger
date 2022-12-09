@@ -326,7 +326,7 @@ int dbglogger_init_str(const char* ini_str) {
         return dbglogger_init_mode(FILE_LOGGER, data, 0);
     } else
     if (strcmp(mode, TTY_INI_STR) == 0) {
-        return dbglogger_init_mode(TTY_INI_STR, data, 0);
+        return dbglogger_init_mode(TTY_LOGGER, NULL, 0);
     }
     
     return(NO_LOGGER);
