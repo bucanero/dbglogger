@@ -42,7 +42,8 @@ typedef enum {
     NO_LOGGER,
     UDP_LOGGER,
     TCP_LOGGER,
-    FILE_LOGGER    
+    FILE_LOGGER,
+    TTY_LOGGER
 } LOGGER_MODES;
 
 typedef struct {
