@@ -1,8 +1,11 @@
 // http://beej.us/guide/bgnet/output/html/singlepage/bgnet.html#simpleserver
 #include <stdio.h>
+#include <ctype.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <string.h>
+#include <dirent.h>
+#include <sys/stat.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -14,22 +17,24 @@
 
 #include "dbglogger.h"
 #include "systhread.h"
+#include "html.h"
+
+#ifdef __PSVITA__
+#define IS_DIR(X)     (X->d_stat.st_mode & SCE_S_IFDIR)
+#else
+#define IS_DIR(X)     (X->d_type == DT_DIR)
+#endif
 
 #define BACKLOG         32      // how many pending connections queue will hold
 #define NUM_THREADS     4
 
 #define N_ELEMS(x)  (sizeof(x) / sizeof((x)[0]))
 
-const char ERROR_PAGE[] = "<HTML><HEAD><TITLE>.:: HTTP/Error</TITLE></HEAD>"
-             "<BODY BGCOLOR=\"#FFFFFF\" ALINK=\"#000000\" VLINK=\"#000000\" LINK=\"#000000\">"
-             "<FONT FACE=\"Arial\"><H1>.:: <I>HTTP/Error</I></H1></FONT>"
-             "<CENTER><IMG SRC=\"https://bucanero.github.io/bucanero/error.gif\" WIDTH=\"228\" HEIGHT=\"155\" BORDER=\"0\" ALT=\"Error\"></CENTER>"
-             "<P ALIGN=\"RIGHT\"><B><FONT FACE=\"Arial\" SIZE=\"3\">&lt;&lt; <A HREF=\"javascript:history.go(-1);\">go back</A> ::.</FONT></B></P></BODY></HTML>\r\n";
-
 typedef struct {
     int idx;
     int sockfd;
     dWebReqHandler_t reqHandler;
+    void* usrData;
 } threadData_t;
 
 
@@ -59,49 +64,90 @@ static char* getContentType(const char *path)
     char *ext = strrchr(path, '.');
     int length = N_ELEMS(extensions);
 
-    for(int i = 0; i < length; i++)
-        if(!strcmp(ext, extensions[i].ext))
+    for(int i = 0; ext && i < length; i++)
+        if(!strcasecmp(ext, extensions[i].ext))
             return extensions[i].filetype;
 
     return extensions[0].filetype;
 }
 
-static void sendResponse(int fd, char* buf, const char* code, const char* type, long len, const char* page)
+static int urlDecode(char *dStr)
 {
-    snprintf(buf, BUFSIZ, "HTTP/1.0 %s\r\n"
+    int i, j;
+    char hex[] = "00"; /* for a hex code */
+
+    for(i=0, j=0; dStr[i]; i++, j++)
+    {
+        if(dStr[i] != '%' || dStr[i+1] == 0)
+        {
+            dStr[j] = dStr[i];
+            continue;
+        }
+
+        if(isxdigit((int)dStr[i+1]) && isxdigit((int)dStr[i+2]))
+        {
+            /* combine the next two numbers into one */
+            hex[0] = dStr[i+1];
+            hex[1] = dStr[i+2];
+
+            /* convert it to decimal */
+            dStr[j] = strtol(hex, NULL, 16);
+            i += 2; /* move to the end of the hex */
+        }
+    }
+    dStr[j] = 0; /* null terminate the string */
+
+    return (i != j);
+}
+
+static void sendResponse(int fd, const char* code, const char* type, long len, const char* page)
+{
+    char* buf;
+
+    asprintf(&buf, "HTTP/1.0 %s\r\n"
         "Connection: close\r\n"
         "Content-Type: %s\r\n"
         "Content-Length: %ld\r\n"
-        "Server: dbglogger/1.0 (PlayStation)\r\n\r\n%s", code, type, len, page ? page : "");
+        "Server: dbglogger/1.0 (PlayStation)\r\n\r\n", code, type, len);
     if (send(fd, buf, strlen(buf), 0) == -1)
         dbglogger_log("(error) send");
+
+    if (page && send(fd, page, len, 0) == -1)
+        dbglogger_log("(error) send body");
+
+    free(buf);
 }
 
-static inline void errorPage(int fd, char* buf)
+static inline void errorPage(int fd)
 {
-    sendResponse(fd, buf, "404 Not Found", "text/html", strlen(ERROR_PAGE), ERROR_PAGE);
+    sendResponse(fd, "404 Not Found", "text/html", strlen(ERROR_PAGE), ERROR_PAGE);
 }
 
-static int serveFile(int socket, const char* path, char method)
+static int serveFile(int socket, const dWebResponse_t* response, char method)
 {
     FILE *fd;
-    int readRet = strlen(path);
+    int readRet;
     char buf[BUFSIZ];
 
-    dbglogger_log("Serving (%s)...", path);
-
-    if ((readRet > 0 && path[readRet-1] == '/') || (fd = fopen(path, "rb")) == NULL)
+    if (response->size)
     {
-        errorPage(socket, buf);
+        sendResponse(socket, "200 OK", getContentType(response->type), response->size, method == 'H' ? NULL : response->data);
+        return 200;
+    }
+        
+    if (!response->data || (fd = fopen(response->data, "rb")) == NULL)
+    {
+        errorPage(socket);
         return 404;
     }
+    dbglogger_log("Serving (%s)...", response->data);
 
     fseek(fd, 0, SEEK_END);
     long fsize = ftell(fd);
     fseek(fd, 0, SEEK_SET);
 
     // Write header
-    sendResponse(socket, buf, "200 OK", getContentType(path), fsize, NULL);
+    sendResponse(socket, "200 OK", getContentType(response->data), fsize, NULL);
 
     // skip data for HEAD method
     if (method == 'H') {
@@ -127,7 +173,6 @@ static int serveFile(int socket, const char* path, char method)
 static dWebRequest_t * parseRequest(const char *start)
 {
     dWebRequest_t *newRequest;
-    const char *end;
 
     if(strncmp("GET", start, 3) != 0 && strncmp("HEAD", start, 4) != 0)
     {
@@ -141,10 +186,10 @@ static dWebRequest_t * parseRequest(const char *start)
     newRequest->method = start[0];
     // Jump past: "GET "
     start = strchr(start, ' ') + 1;
-    end = strchr(start, ' ');
+    *strchr(start, ' ') = 0;
 
-    strncpy(newRequest->resource, start, end - start);
-//    newRequest->resource[pathLen] = '\0';
+    newRequest->resource = strdup(start);
+    urlDecode(newRequest->resource);
 
     return newRequest;
 }
@@ -160,9 +205,10 @@ static void* get_in_addr(struct sockaddr* sa)
 static void client_handler(void* td)
 {
     threadData_t* data = (threadData_t*) td;
+    dWebResponse_t response;
     char buf[BUFSIZ];
 
-    dbglogger_printf("Thread #%d started (0x%08X)\n", data->idx, data->sockfd);
+    dbglogger_log("Thread #%d started (0x%08X)", data->idx, data->sockfd);
 
     while (run_server)
     {
@@ -172,7 +218,7 @@ static void client_handler(void* td)
             continue;
         }
 
-        dbglogger_printf("Client #%d running (0x%08X)\n", data->idx, data->sockfd);
+        dbglogger_log("Client #%d running (0x%08X)", data->idx, data->sockfd);
 
         memset(buf, 0, BUFSIZ);
         recv(data->sockfd, buf, BUFSIZ, 0);
@@ -183,14 +229,17 @@ static void client_handler(void* td)
         // If parsing failed shutdown and exit
         if(newRequest)
         {
-            if(data->reqHandler && data->reqHandler(newRequest, buf))
-                serveFile(data->sockfd, buf, newRequest->method);
+            memset(&response, 0, sizeof(dWebResponse_t));
+            if(data->reqHandler && data->reqHandler(newRequest, &response, data->usrData))
+                serveFile(data->sockfd, &response, newRequest->method);
             else
-                errorPage(data->sockfd, buf);
+                errorPage(data->sockfd);
 
+            free(response.data);
+            free(newRequest->resource);
             free(newRequest);
         }
-        else sendResponse(data->sockfd, buf, "501 Not Implemented", "text/plain", 0, NULL);
+        else sendResponse(data->sockfd, "501 Not Implemented", "text/plain", 0, NULL);
 
         shutdown(data->sockfd, SHUT_RDWR);
         close(data->sockfd);
@@ -214,10 +263,9 @@ static void httpd(void *td)
     pfds[0].events = POLLIN;
     pfds[0].revents = 0;
 
+    dbglogger_log("webserver:%d running (0x%08X)", run_server, data->sockfd);
     while (run_server)
     {
-        dbglogger_log("webserver:%d running (0x%08X)", run_server, data->sockfd);
-
         new_fd = poll(pfds, 1, 500);
         if (new_fd <= 0 || !(pfds[0].revents & POLLIN) || !run_server)
             continue;
@@ -252,7 +300,7 @@ static void httpd(void *td)
     sys_thread_exit(0);
 }
 
-int dbg_webserver_start(int port, dWebReqHandler_t handler)
+int dbg_webserver_start(int port, dWebReqHandler_t handler, void* usrdata)
 {
     int yes = 1;
     struct sockaddr_in sa;
@@ -288,10 +336,8 @@ int dbg_webserver_start(int port, dWebReqHandler_t handler)
     run_server = port;
     dbglogger_log("webserver:%d starting httpd...", port);
 
-    threadData_t *tdata = malloc(sizeof(threadData_t) * (NUM_THREADS+1));
-    tdata[0].idx = 0;
+    threadData_t *tdata = calloc(NUM_THREADS+1, sizeof(threadData_t));
     tdata[0].sockfd = sockfd;
-    tdata[0].reqHandler = NULL;
 
     sys_thread_create2(threads, 0, &httpd, tdata);
 
@@ -299,6 +345,7 @@ int dbg_webserver_start(int port, dWebReqHandler_t handler)
     {
         tdata[i].idx = i;
         tdata[i].sockfd = -1;
+        tdata[i].usrData = usrdata;
         tdata[i].reqHandler = handler;
 
         sys_thread_create2(threads, i, &client_handler, &tdata[i]);
@@ -318,4 +365,90 @@ void dbg_webserver_stop()
     sys_thread_free(threads);
 
     dbglogger_log("webserver:off");
+}
+
+int dbg_simpleWebServerHandler(dWebRequest_t* req, dWebResponse_t* res, void* data)
+{
+    DIR *dir;
+    char *tmp;
+    struct dirent *d;
+    const char *path = req->resource;
+
+    memset(res, 0, sizeof(dWebResponse_t));
+#ifdef __PSVITA__
+    // on Vita "/" path is a special case, if we are here we
+    // have to send the list of devices (aka mountpoints).
+    if (strcmp(req->resource, "/") == 0)
+    {
+        struct stat st;
+        const char *devices[] = {
+            "gro0:", "grw0:", "imc0:", "os0:", "pd0:", "sa0:", "sd0:", "tm0:",
+            "ud0:", "uma0:", "ur0:", "ux0:", "vd0:", "vs0:", "xmc0:", "host0:", NULL };
+
+        snprintf(res->type, sizeof(res->type), ".html");
+        asprintf(&res->data, LIST_HEADER, req->resource, req->resource, req->resource);
+
+        for (int i = 0; devices[i]; i++)
+        {
+            if (stat(devices[i], &st) < 0)
+                continue;
+
+            asprintf(&tmp, "%s<li><a href=\"/%s/\" title=\"%s\" class=\"folder\">%s</a></li>", res->data, devices[i], devices[i], devices[i]);
+            free(res->data);
+            res->data = tmp;
+        }
+        
+        asprintf(&tmp, "%s%s", res->data, LIST_END);
+        free(res->data);
+        res->data = tmp;
+        res->size = strlen(res->data);
+
+        return 1;
+    }
+    path++;
+#endif
+
+    if ((dir = opendir(path)) == NULL)
+    {
+        res->data = strdup(path);
+        return 1;
+    }
+    dbglogger_log("Listing (%s)...", path);
+
+    snprintf(res->type, sizeof(res->type), ".html");
+    asprintf(&res->data, LIST_HEADER, req->resource, req->resource, req->resource);
+
+    while ((d = readdir(dir)) != NULL)
+    {
+        if (strcmp(d->d_name, ".") == 0)
+            continue;
+
+        if (strcmp(d->d_name, "..") == 0)
+        {
+            size_t len = strlen(req->resource);
+            if (len > 1 && req->resource[len-1] == '/')
+                strrchr(req->resource, '/')[0] = 0;
+
+            strrchr(req->resource, '/')[0] = 0;
+            asprintf(&tmp, "%s<li><a href=\"%s/\" title=\"%s\" class=\"folder\">%s</a></li>", res->data, req->resource, req->resource, d->d_name);
+
+            free(res->data);
+            res->data = tmp;
+            continue;
+        }
+
+        char *ext = strrchr(d->d_name, '.');
+        asprintf(&tmp, "%s<li><a href=\"./%s%s\" title=\"%s\" class=\"%s %s\">%s</a></li>", res->data, d->d_name, (IS_DIR(d) ? "/" : ""), d->d_name, (IS_DIR(d) ? "folder" : "file"), (ext ? ext+1 : ""), d->d_name);
+
+        free(res->data);
+        res->data = tmp;
+    }
+    closedir(dir);
+
+    asprintf(&tmp, "%s%s", res->data, LIST_END);
+    free(res->data);
+    res->data = tmp;
+    res->size = strlen(res->data);
+
+    return 1;
 }

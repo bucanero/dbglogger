@@ -146,6 +146,72 @@ char* dbg_base64_encode(const unsigned char *data, int data_len)
     return (out);
 }
 
+/*
+ * base64_decode - Base64 decode
+ * @src: Data to be decoded
+ * @out_len: Pointer to output length variable
+ * Returns: Allocated buffer of out_len bytes of decoded data, or NULL on failure
+ *
+ * Caller is responsible for freeing the returned buffer.
+ */
+unsigned char * dbg_base64_decode(const char *src, size_t *out_len)
+{
+	unsigned char dtable[256], *out, *pos, block[4], tmp;
+	size_t i, count, len = strlen(src);
+	int pad = 0;
+
+	memset(dtable, 0x80, 256);
+	for (i = 0; i < sizeof(encode_table[ENCODE_BASE64]) - 1; i++)
+		dtable[(unsigned char)encode_table[ENCODE_BASE64][i]] = (unsigned char) i;
+	dtable['='] = 0;
+
+	count = 0;
+	for (i = 0; i < len; i++) {
+		if (dtable[(unsigned char)src[i]] != 0x80)
+			count++;
+	}
+
+	if (count == 0 || count % 4)
+		return NULL;
+
+	pos = out = malloc(count / 4 * 3);
+	if (out == NULL)
+		return NULL;
+
+	count = 0;
+	for (i = 0; i < len; i++) {
+		tmp = dtable[(unsigned char)src[i]];
+		if (tmp == 0x80)
+			continue;
+
+		if (src[i] == '=')
+			pad++;
+		block[count] = tmp;
+		count++;
+		if (count == 4) {
+			*pos++ = (block[0] << 2) | (block[1] >> 4);
+			*pos++ = (block[1] << 4) | (block[2] >> 2);
+			*pos++ = (block[2] << 6) | block[3];
+			count = 0;
+			if (pad) {
+				if (pad == 1)
+					pos--;
+				else if (pad == 2)
+					pos -= 2;
+				else {
+					// Invalid padding
+					free(out);
+					return NULL;
+				}
+				break;
+			}
+		}
+	}
+
+	*out_len = pos - out;
+	return out;
+}
+
 #ifdef __PPU__
 // check if we receive a connection and kill the process
 static void debug_netkill_thread(void *port)

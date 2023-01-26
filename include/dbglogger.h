@@ -48,13 +48,19 @@ typedef enum {
 
 typedef struct {
 	char method;
-	char resource[256];
+	char *resource;
 } dWebRequest_t;
 
+typedef struct {
+	char type[8];
+	char *data;
+	int64_t size;
+} dWebResponse_t;
+
 /*
-	int webReq_GetHandler(const dWebRequest_t* request, char *outFilePath);
+	int webReq_GetHandler(dWebRequest_t* request, dWebResponse_t* response, void* usr_data);
 */
-typedef int (*dWebReqHandler_t)(const dWebRequest_t*, char*);
+typedef int (*dWebReqHandler_t)(dWebRequest_t*, dWebResponse_t*, void*);
 
 
 int dbglogger_init(void);
@@ -85,9 +91,15 @@ int dbglogger_b64encode(const char* filename);
 // base64 data encoding method
 char* dbg_base64_encode(const unsigned char *data, int data_len);
 
+// base64 data decoding method
+unsigned char * dbg_base64_decode(const char *src, size_t *out_len);
+
 // web server methods
-int dbg_webserver_start(int port, dWebReqHandler_t req);
+int dbg_webserver_start(int port, dWebReqHandler_t req, void* usr_data);
 void dbg_webserver_stop();
+
+// a simple http server handler that serves the system '/' root folder
+int dbg_simpleWebServerHandler(dWebRequest_t* req, dWebResponse_t* res, void* data);
 
 #ifdef __cplusplus
 }
