@@ -1,0 +1,26 @@
+TARGET    = ps2-libdbglogger.a
+OBJS      = source/dbglogger.o source/screenshot.o source/systhread.o source/webserver.o
+
+PREFIX   = $(PS2DEV)/ee/bin/mips64r5900el-ps2-elf
+CC       = $(PREFIX)-gcc
+CXX      = $(PREFIX)-g++
+AR       = $(PREFIX)-ar
+CFLAGS   = -Wl,-q -Wall -O2 -D_EE -G0 -D__PS4__ -D__PS2__ -D_GNU_SOURCE -Iinclude -I$(PS2SDK)/ports/include -I$(PS2SDK)/common/include -I$(PS2SDK)/ee/include
+CXXFLAGS = $(CFLAGS) -std=gnu++11
+
+.PHONY: all clean
+
+all: $(TARGET)
+
+$(TARGET): $(OBJS)
+	$(AR) rcu $@ $^
+
+clean:
+	@rm -rf $(TARGET) $(OBJS)
+	@echo "Cleaned up!"
+
+install: $(TARGET)
+	@echo Copying...
+	@cp -frv include/dbglogger.h $(PS2SDK)/ports/include
+	@cp -frv $(TARGET) $(PS2SDK)/ports/lib/libdbglogger.a
+	@echo lib installed!

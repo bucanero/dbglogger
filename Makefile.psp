@@ -1,0 +1,20 @@
+TARGET_LIB = psp-libdbglogger.a
+OBJS      = source/dbglogger.o source/screenshot.o source/systhread.o
+# source/webserver.o
+
+INCDIR = include
+CFLAGS = -O2 -Wall -D__PS4__ -D__PSP__ -D_GNU_SOURCE
+CXXFLAGS = $(CFLAGS) -fno-exceptions -fno-rtti
+ASFLAGS = $(CFLAGS)
+
+LIBDIR =
+LDFLAGS =
+
+PSPSDK=$(shell psp-config --pspsdk-path)
+include $(PSPSDK)/lib/build.mak
+
+install: $(TARGET_LIB)
+	@echo Copying...
+	@cp -frv include/dbglogger.h $(PSPDEV)/psp/include
+	@cp -frv $(TARGET_LIB) $(PSPDEV)/psp/lib/libdbglogger.a
+	@echo lib installed!
