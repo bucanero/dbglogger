@@ -275,9 +275,9 @@ static void networkInit(const char* dbglog_ip, const unsigned short dbglog_port)
     netConnect(socketFD, (struct sockaddr *)&stSockAddr, sizeof(stSockAddr));
 }
 
-static int logFileInit(const char* file_path) {
+static int logFileInit(const char* file_path, unsigned short overwrite) {
     snprintf(logFile, sizeof(logFile), "%s", file_path);
-    FILE *fp = fopen(logFile, "a");
+    FILE *fp = fopen(logFile, overwrite ? "w" : "a");
     
     if (fp) {
         fclose(fp);
@@ -353,7 +353,7 @@ int dbglogger_init_mode(const unsigned char log_mode, const char* dest, const un
             break;
 
         case FILE_LOGGER:
-            if (logFileInit(dest))
+            if (logFileInit(dest, port))
                 dbglogger_log("----- File (%s) debug logger initialized -----", dest);
             break;
 
