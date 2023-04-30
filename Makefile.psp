@@ -1,6 +1,5 @@
 TARGET_LIB = psp-libdbglogger.a
-OBJS      = source/dbglogger.o source/screenshot.o source/systhread.o
-# source/webserver.o
+OBJS      = source/dbglogger.o source/screenshot.o source/systhread.o source/webserver.o
 
 INCDIR = include
 CFLAGS = -O2 -Wall -D__PS4__ -D__PSP__ -D_GNU_SOURCE
