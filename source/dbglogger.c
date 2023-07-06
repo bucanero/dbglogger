@@ -270,8 +270,11 @@ static void networkInit(const char* dbglog_ip, const unsigned short dbglog_port)
     memset(&stSockAddr, 0, sizeof(stSockAddr));
     stSockAddr.sin_family = AF_INET;
     stSockAddr.sin_port = htons(dbglog_port);
+#ifdef __PS2__
+    stSockAddr.sin_addr.s_addr = inet_addr(dbglog_ip);
+#else
     inet_pton(AF_INET, dbglog_ip, &stSockAddr.sin_addr);
-
+#endif
     netConnect(socketFD, (struct sockaddr *)&stSockAddr, sizeof(stSockAddr));
 }
 
