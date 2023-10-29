@@ -13,6 +13,7 @@
 #include <net/poll.h>
 #elif __PSP__
 // PSP: poll is not supported
+#include <pspiofilemgr.h>
 #else
 #include <poll.h>
 #endif
@@ -23,6 +24,35 @@
 
 #ifdef __PSVITA__
 #define IS_DIR(X)     (X->d_stat.st_mode & SCE_S_IFDIR)
+
+static int no_device(const char* dev)
+{
+    struct stat st;
+    return (stat(dev, &st) < 0);
+}
+#elif __PSP__
+#define IS_DIR(X)     (check_dir_psp(reqpath, X->d_name))
+
+static int check_dir_psp(const char* base, const char* fn)
+{
+    SceIoStat stat;
+    char path[256];
+
+    snprintf(path, sizeof(path), "%s%s", base, fn);
+    if (sceIoGetstat(path, &stat) == 0 && FIO_S_ISDIR(stat.st_mode))
+        return 1;
+
+    return 0;
+}
+
+static int no_device(const char* dev)
+{
+    SceDevInf inf;
+    SceDevctlCmd cmd = { .dev_inf = &inf };
+
+    memset(&inf, 0, sizeof(SceDevInf));
+    return (sceIoDevctl(dev, SCE_PR_GETDEV, &cmd, sizeof(SceDevctlCmd), NULL, 0) < 0);
+}
 #else
 #define IS_DIR(X)     (X->d_type == DT_DIR)
 #endif
@@ -399,22 +429,25 @@ int dbg_simpleWebServerHandler(dWebRequest_t* req, dWebResponse_t* res, void* da
     const char *path = req->resource;
 
     memset(res, 0, sizeof(dWebResponse_t));
-#ifdef __PSVITA__
-    // on Vita "/" path is a special case, if we are here we
+#if defined(__PSVITA__) || defined(__PSP__)
+    // on Vita & PSP "/" path is a special case, if we are here we
     // have to send the list of devices (aka mountpoints).
     if (strcmp(req->resource, "/") == 0)
     {
-        struct stat st;
         const char *devices[] = {
+#ifdef __PSP__
+            "ms0:", "ef0:", NULL };
+#else
             "gro0:", "grw0:", "imc0:", "os0:", "pd0:", "sa0:", "sd0:", "tm0:",
             "ud0:", "uma0:", "ur0:", "ux0:", "vd0:", "vs0:", "xmc0:", "host0:", NULL };
+#endif
 
         snprintf(res->type, sizeof(res->type), ".html");
         asprintf(&res->data, LIST_HEADER, req->resource, req->resource, req->resource);
 
         for (int i = 0; devices[i]; i++)
         {
-            if (stat(devices[i], &st) < 0)
+            if (no_device(devices[i]))
                 continue;
 
             asprintf(&tmp, "%s<li><a href=\"/%s/\" title=\"%s\" class=\"folder\">%s</a></li>", res->data, devices[i], devices[i], devices[i]);
@@ -438,6 +471,7 @@ int dbg_simpleWebServerHandler(dWebRequest_t* req, dWebResponse_t* res, void* da
         return 1;
     }
     dbglogger_log("Listing (%s)...", path);
+    char* reqpath = strdup(path);
 
     snprintf(res->type, sizeof(res->type), ".html");
     asprintf(&res->data, LIST_HEADER, req->resource, req->resource, req->resource);
@@ -468,6 +502,7 @@ int dbg_simpleWebServerHandler(dWebRequest_t* req, dWebResponse_t* res, void* da
         res->data = tmp;
     }
     closedir(dir);
+    free(reqpath);
 
     asprintf(&tmp, "%s%s", res->data, LIST_END);
     free(res->data);
