@@ -1,5 +1,6 @@
 TARGET    = ps2-libdbglogger.a
-OBJS      = source/dbglogger.o source/screenshot.o source/systhread.o source/webserver.o
+OBJS      = source/dbglogger.o source/screenshot.o source/systhread.o 
+#source/webserver.o
 
 PREFIX   = $(PS2DEV)/ee/bin/mips64r5900el-ps2-elf
 CC       = $(PREFIX)-gcc
