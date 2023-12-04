@@ -11,6 +11,9 @@
 #include <arpa/inet.h>
 #ifdef __PPU__
 #include <net/poll.h>
+#elif __PSP__
+// PSP: poll is not supported
+#include <pspiofilemgr.h>
 #else
 #include <poll.h>
 #endif
@@ -21,6 +24,35 @@
 
 #ifdef __PSVITA__
 #define IS_DIR(X)     (X->d_stat.st_mode & SCE_S_IFDIR)
+
+static int no_device(const char* dev)
+{
+    struct stat st;
+    return (stat(dev, &st) < 0);
+}
+#elif __PSP__
+#define IS_DIR(X)     (check_dir_psp(reqpath, X->d_name))
+
+static int check_dir_psp(const char* base, const char* fn)
+{
+    SceIoStat stat;
+    char path[256];
+
+    snprintf(path, sizeof(path), "%s%s", base, fn);
+    if (sceIoGetstat(path, &stat) == 0 && FIO_S_ISDIR(stat.st_mode))
+        return 1;
+
+    return 0;
+}
+
+static int no_device(const char* dev)
+{
+    SceDevInf inf;
+    SceDevctlCmd cmd = { .dev_inf = &inf };
+
+    memset(&inf, 0, sizeof(SceDevInf));
+    return (sceIoDevctl(dev, SCE_PR_GETDEV, &cmd, sizeof(SceDevctlCmd), NULL, 0) < 0);
+}
 #else
 #define IS_DIR(X)     (X->d_type == DT_DIR)
 #endif
@@ -202,11 +234,42 @@ static void* get_in_addr(struct sockaddr* sa)
     return NULL;
 }
 
+static void client_process(threadData_t* data)
+{
+    dWebResponse_t response;
+    char buf[BUFSIZ];
+
+    dbglogger_log("Client #%d running (0x%08X)", data->idx, data->sockfd);
+
+    memset(buf, 0, BUFSIZ);
+    recv(data->sockfd, buf, BUFSIZ, 0);
+
+    dbglogger_printf("%d>>\n---\n%s\n---\n", data->idx, buf);
+    dWebRequest_t *newRequest = parseRequest(buf);
+
+    // If parsing failed shutdown and exit
+    if(newRequest)
+    {
+        memset(&response, 0, sizeof(dWebResponse_t));
+        if(data->reqHandler && data->reqHandler(newRequest, &response, data->usrData))
+            serveFile(data->sockfd, &response, newRequest->method);
+        else
+            errorPage(data->sockfd);
+
+        free(response.data);
+        free(newRequest->resource);
+        free(newRequest);
+    }
+    else sendResponse(data->sockfd, "501 Not Implemented", "text/plain", 0, NULL);
+
+    shutdown(data->sockfd, SHUT_RDWR);
+    close(data->sockfd);
+    data->sockfd = -1;
+}
+
 static void client_handler(void* td)
 {
     threadData_t* data = (threadData_t*) td;
-    dWebResponse_t response;
-    char buf[BUFSIZ];
 
     dbglogger_log("Thread #%d started (0x%08X)", data->idx, data->sockfd);
 
@@ -218,32 +281,7 @@ static void client_handler(void* td)
             continue;
         }
 
-        dbglogger_log("Client #%d running (0x%08X)", data->idx, data->sockfd);
-
-        memset(buf, 0, BUFSIZ);
-        recv(data->sockfd, buf, BUFSIZ, 0);
-
-        dbglogger_printf("%d>>\n---\n%s\n---\n", data->idx, buf);
-        dWebRequest_t *newRequest = parseRequest(buf);
-
-        // If parsing failed shutdown and exit
-        if(newRequest)
-        {
-            memset(&response, 0, sizeof(dWebResponse_t));
-            if(data->reqHandler && data->reqHandler(newRequest, &response, data->usrData))
-                serveFile(data->sockfd, &response, newRequest->method);
-            else
-                errorPage(data->sockfd);
-
-            free(response.data);
-            free(newRequest->resource);
-            free(newRequest);
-        }
-        else sendResponse(data->sockfd, "501 Not Implemented", "text/plain", 0, NULL);
-
-        shutdown(data->sockfd, SHUT_RDWR);
-        close(data->sockfd);
-        data->sockfd = -1;
+        client_process(data);
     }
 
     dbglogger_log("(end) #%d", data->idx);
@@ -254,21 +292,25 @@ static void httpd(void *td)
 {
     int new_fd;
     threadData_t* data = (threadData_t*) td;
-    struct pollfd pfds[1];
     struct sockaddr_in their_addr; // connector's address
     socklen_t sin_size = sizeof(their_addr);
     char str[INET_ADDRSTRLEN];
+#ifndef __PSP__
+    struct pollfd pfds[1];
 
     pfds[0].fd = data->sockfd;
     pfds[0].events = POLLIN;
     pfds[0].revents = 0;
+#endif
 
     dbglogger_log("webserver:%d running (0x%08X)", run_server, data->sockfd);
     while (run_server)
     {
+#ifndef __PSP__
         new_fd = poll(pfds, 1, 500);
         if (new_fd <= 0 || !(pfds[0].revents & POLLIN) || !run_server)
             continue;
+#endif
 
         new_fd = accept(data->sockfd, (struct sockaddr*) &their_addr, &sin_size);
         if (new_fd < 0)
@@ -280,6 +322,10 @@ static void httpd(void *td)
         inet_ntop(their_addr.sin_family, get_in_addr((struct sockaddr*) &their_addr), str, sizeof(str));
         dbglogger_printf("httpd #%d: got connection from %s\n", data->idx, str);
 
+#ifdef __PSP__
+        data[1].sockfd = new_fd;
+        client_process(&data[1]);
+#else
         while (new_fd)
         {
             for (int i=1; new_fd && i <= NUM_THREADS; i++)
@@ -290,6 +336,7 @@ static void httpd(void *td)
                 }
             usleep(new_fd ? 1000 : 0);
         }
+#endif
     }
 
     shutdown(data->sockfd, SHUT_RDWR);
@@ -341,6 +388,10 @@ int dbg_webserver_start(int port, dWebReqHandler_t handler, void* usrdata)
 
     sys_thread_create2(threads, 0, &httpd, tdata);
 
+#ifdef __PSP__
+    tdata[1].reqHandler = handler;
+    tdata[1].usrData = usrdata;
+#else
     for (int i = 1; i <= NUM_THREADS; i++)
     {
         tdata[i].idx = i;
@@ -350,18 +401,21 @@ int dbg_webserver_start(int port, dWebReqHandler_t handler, void* usrdata)
 
         sys_thread_create2(threads, i, &client_handler, &tdata[i]);
     }
+#endif
 
     return 1;
 }
 
 void dbg_webserver_stop()
 {
+    void* ret;
     if (!run_server)
         return;
 
     run_server = 0;
     shutdown(sockfd, SHUT_RDWR);
     close(sockfd);
+    sys_thread_join2(threads, 0, &ret);
     sys_thread_free(threads);
 
     dbglogger_log("webserver:off");
@@ -375,22 +429,25 @@ int dbg_simpleWebServerHandler(dWebRequest_t* req, dWebResponse_t* res, void* da
     const char *path = req->resource;
 
     memset(res, 0, sizeof(dWebResponse_t));
-#ifdef __PSVITA__
-    // on Vita "/" path is a special case, if we are here we
+#if defined(__PSVITA__) || defined(__PSP__)
+    // on Vita & PSP "/" path is a special case, if we are here we
     // have to send the list of devices (aka mountpoints).
     if (strcmp(req->resource, "/") == 0)
     {
-        struct stat st;
         const char *devices[] = {
+#ifdef __PSP__
+            "ms0:", "ef0:", NULL };
+#else
             "gro0:", "grw0:", "imc0:", "os0:", "pd0:", "sa0:", "sd0:", "tm0:",
             "ud0:", "uma0:", "ur0:", "ux0:", "vd0:", "vs0:", "xmc0:", "host0:", NULL };
+#endif
 
         snprintf(res->type, sizeof(res->type), ".html");
         asprintf(&res->data, LIST_HEADER, req->resource, req->resource, req->resource);
 
         for (int i = 0; devices[i]; i++)
         {
-            if (stat(devices[i], &st) < 0)
+            if (no_device(devices[i]))
                 continue;
 
             asprintf(&tmp, "%s<li><a href=\"/%s/\" title=\"%s\" class=\"folder\">%s</a></li>", res->data, devices[i], devices[i], devices[i]);
@@ -414,6 +471,7 @@ int dbg_simpleWebServerHandler(dWebRequest_t* req, dWebResponse_t* res, void* da
         return 1;
     }
     dbglogger_log("Listing (%s)...", path);
+    char* reqpath = strdup(path);
 
     snprintf(res->type, sizeof(res->type), ".html");
     asprintf(&res->data, LIST_HEADER, req->resource, req->resource, req->resource);
@@ -444,6 +502,7 @@ int dbg_simpleWebServerHandler(dWebRequest_t* req, dWebResponse_t* res, void* da
         res->data = tmp;
     }
     closedir(dir);
+    free(reqpath);
 
     asprintf(&tmp, "%s%s", res->data, LIST_END);
     free(res->data);

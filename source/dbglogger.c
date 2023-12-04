@@ -25,6 +25,11 @@
 #include <lv2/process.h>
 #endif
 
+#ifdef __PSP__
+#include <psptypes.h>
+#include <psprtc.h>
+#endif
+
 #include <netinet/in.h>
 #include <unistd.h>
 #include <sys/file.h>
@@ -331,10 +336,15 @@ void dbglogger_log(const char* fmt, ...) {
         va_start(arg, fmt);
         vsnprintf(buffer, sizeof(buffer), fmt, arg);
         va_end(arg);
-    
+#ifdef __PSP__
+        pspTime t;
+        sceRtcGetCurrentClockLocalTime(&t);
+        dbglogger_printf("[%d-%02d-%02d %02d:%02d:%02d] %s\n", t.year, t.month, t.day, t.hour, t.minutes, t.seconds, buffer);
+#else
         struct tm t = *gmtime(&(time_t){time(NULL)});
     
         dbglogger_printf("[%d-%02d-%02d %02d:%02d:%02d] %s\n", t.tm_year+1900, t.tm_mon+1, t.tm_mday, t.tm_hour, t.tm_min, t.tm_sec, buffer);
+#endif
     }
 }
 
