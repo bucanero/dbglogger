@@ -337,9 +337,9 @@ void dbglogger_log(const char* fmt, ...) {
         vsnprintf(buffer, sizeof(buffer), fmt, arg);
         va_end(arg);
 #ifdef __PSP__
-        pspTime t;
+        ScePspDateTime t;
         sceRtcGetCurrentClockLocalTime(&t);
-        dbglogger_printf("[%d-%02d-%02d %02d:%02d:%02d] %s\n", t.year, t.month, t.day, t.hour, t.minutes, t.seconds, buffer);
+        dbglogger_printf("[%d-%02d-%02d %02d:%02d:%02d] %s\n", t.year, t.month, t.day, t.hour, t.minute, t.second, buffer);
 #else
         struct tm t = *gmtime(&(time_t){time(NULL)});
     
