@@ -1,0 +1,11 @@
+TARGET = dc-libdbglogger.a
+OBJS = source/dbglogger.o source/screenshot.o source/systhread.o
+KOS_CFLAGS += -Iinclude -D__PS4__
+
+include ${KOS_PORTS}/scripts/lib.mk
+
+install: $(TARGET)
+	@echo Copying...
+	@cp -frv include/dbglogger.h $(KOS_PORTS)/include
+	@cp -frv $(TARGET) $(KOS_PORTS)/lib/libdbglogger.a
+	@echo lib installed!
